@@ -421,115 +421,188 @@ Type anything that isn't a number or `r <text>` to exit Slack mode and return to
 
 ![Dashboard preview](assets/dashboard-preview.png)
 
-A real-time web dashboard that shows your scheduled tasks, memories, token costs, and system health. Open it from your phone via Telegram or from any browser.
+A live web page that shows you everything happening inside your assistant: what tasks are scheduled, what it remembers, how much you're spending, and whether it's healthy. You open it from Telegram with one tap.
 
 ### How the dashboard works
 
 ![Dashboard architecture](assets/dashboard-architecture.png)
 
-The dashboard is a lightweight web server (Hono, ~100 lines) running inside the bot process. It serves a single HTML page and JSON API endpoints that query your SQLite database directly. Nothing is sent to any external service.
+When you start ClaudeClaw, a small web page starts running alongside the bot. It reads directly from the same database the bot uses and shows you the data in real time.
 
-The flow:
+Here's what happens when you use it:
 
-1. You send `/dashboard` in Telegram
-2. The bot replies with a clickable URL containing your auth token
-3. Your browser hits the Hono server on port 3141
-4. The server queries SQLite and returns live data
-5. The page auto-refreshes every 60 seconds
+1. **You send `/dashboard` in Telegram** — the bot replies with a clickable link
+2. **You tap the link** — a web page opens in your browser with four live panels
+3. **The page updates itself every 60 seconds** — no need to refresh manually
 
-If you add a **Cloudflare Tunnel** (optional, free), you can access the dashboard from your phone anywhere. Without a tunnel, it only works on `localhost`.
+By default, this web page only works on the same computer running the bot. If you want to open it from your phone while you're out, you can add a free tunnel (explained below).
 
-### What the dashboard shows
+**Nothing leaves your machine.** The dashboard reads your local database and shows it to you. No data is sent to any cloud service.
 
-| Section | What's in it |
-|---------|-------------|
-| **Scheduled Tasks** | Every task with status (active/paused), human-readable schedule, live countdown to next run, collapsible last result |
-| **Memory Landscape** | Semantic/episodic memory counts (tap to drill down), salience distribution bar chart, fading memories list, most accessed list, 30-day memory creation timeline |
-| **System Health** | Circular context window gauge (green/amber/red), session turns + age + compactions, WhatsApp/Slack connection status |
-| **Tokens & Cost** | Today's spend and turn count, all-time total, 30-day cost line chart, cache hit rate doughnut |
+### What you'll see
 
-Single column on mobile, two columns on desktop. Auto-detects your device.
+| Panel | What it shows you |
+|-------|-------------------|
+| **Scheduled Tasks** | Every task you've set up. Shows whether it's running or paused, when it will run next (with a live countdown), and what happened last time it ran. Tap a task to expand the details. |
+| **Memory Landscape** | How many things your assistant remembers, broken down by type. Tap the numbers to browse individual memories. Shows which memories are fading (used less often) and which ones come up the most. Includes a chart of how many new memories were created over the past month. |
+| **System Health** | A visual meter showing how full the conversation window is (green = plenty of room, yellow = getting full, red = almost out). Also shows how long the current session has been running, and whether WhatsApp and Slack are connected. |
+| **Tokens & Cost** | How much you've spent today and all-time. A chart showing daily costs over the past month. A donut chart showing how efficiently the system is using cached data (higher = cheaper). |
 
-### Enable the dashboard
+On your phone it's a single scrollable page. On a computer it splits into two columns automatically.
 
-**Step 1 — Generate a token** (this is your dashboard password):
+### How to turn it on
+
+#### Step 1 — Generate a password for the dashboard
+
+Open your terminal and paste this command:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 ```
 
-**Step 2 — Add it to `.env`:**
+It prints a long random string like `a3f8c2d1e5b794...` — this is your dashboard password. **Copy it.** You'll need it in the next step.
+
+#### Step 2 — Add the password to your settings
+
+Open the `.env` file in your ClaudeClaw folder. (This is the same file where your Telegram token and other keys live. Open it with any text editor — TextEdit on Mac, Notepad on Windows, or whatever your terminal editor is.)
+
+Add this line:
 
 ```
-DASHBOARD_TOKEN=paste_your_token_here
+DASHBOARD_TOKEN=paste_the_long_string_here
 ```
 
-Optional settings:
+That's the only setting you need. There are two optional ones you can ignore for now:
+
 ```
-DASHBOARD_PORT=3141          # default 3141, change if taken
-DASHBOARD_URL=               # leave blank for localhost, set for tunnel URL
+DASHBOARD_PORT=3141          # the dashboard uses port 3141 by default — only change this if something else on your computer already uses that port
+DASHBOARD_URL=               # leave this blank for now — you only fill this in if you set up phone access (Step 5 below)
 ```
 
-**Step 3 — Rebuild and restart:**
+Save the file.
+
+#### Step 3 — Rebuild and restart
 
 ```bash
 npm run build
 npm start
 ```
 
-**Step 4 — Open it.** Send `/dashboard` in Telegram, or go to:
+You should see a log line that says `Dashboard server running`. If you don't, double-check that `DASHBOARD_TOKEN` is in your `.env`.
+
+#### Step 4 — Open the dashboard
+
+The easiest way: **send `/dashboard` to your bot in Telegram.** It replies with a clickable link. Tap it. Done.
+
+Or open your browser and go to:
 ```
 http://localhost:3141/?token=YOUR_TOKEN&chatId=YOUR_CHAT_ID
 ```
+Replace `YOUR_TOKEN` with the password from Step 1, and `YOUR_CHAT_ID` with the `ALLOWED_CHAT_ID` from your `.env`.
 
-That's it for local access. If you want to open the dashboard from your phone while away from your machine, add a Cloudflare Tunnel:
+**You're done.** The dashboard now works on the machine running the bot.
 
-### Access from your phone (Cloudflare Tunnel)
+If that's all you need, stop here. The next step is only if you want to access the dashboard from your phone while away from home.
 
-**Quick tunnel** (free, 2 minutes, temporary URL that changes on restart):
+#### Step 5 (optional) — Access from your phone anywhere
+
+Right now the dashboard only works when you're on the same computer. To open it from your phone (or anywhere), you need a "tunnel" — a free service that securely connects your computer to the internet without opening any ports.
+
+**Option A: Quick tunnel** (free, takes 2 minutes, but the link changes every time you restart)
+
+Best for trying it out:
 
 ```bash
+# Install the tunnel tool (Mac)
 brew install cloudflare/cloudflare/cloudflared
+
+# On Linux, use: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
+```
+
+Start the tunnel:
+```bash
 cloudflared tunnel --url http://localhost:3141
 ```
 
-Copy the printed URL into `DASHBOARD_URL` in `.env` and restart.
-
-**Named tunnel** (free, permanent URL, needs a $5-12/yr domain on Cloudflare):
-
-```bash
-cloudflared tunnel login                              # auth with Cloudflare
-cloudflared tunnel create claudeclaw                  # create the tunnel
-cloudflared tunnel route dns claudeclaw dash.yourdomain.com  # point DNS at it
+It prints a URL like `https://something-random.trycloudflare.com`. Copy that URL, open your `.env` file, and set:
+```
+DASHBOARD_URL=https://something-random.trycloudflare.com
 ```
 
-Create `~/.cloudflared/config.yml`:
+Restart the bot (`npm run build && npm start`). Now when you send `/dashboard` in Telegram, the link works from your phone.
+
+**Downside:** The URL changes every time you restart the tunnel. You'll need to update `.env` each time.
+
+**Option B: Permanent URL** (free, but you need to buy a cheap domain for $5-12/year)
+
+This gives you a URL that never changes — like `https://dash.mysite.com`. You need a domain registered through Cloudflare. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → Domain Registration → Register Domain. Cheapest options: `.work`, `.xyz`, `.site` (around $5-12/year).
+
+Once you have a domain, run these commands one at a time:
+
+```bash
+# 1. Install the tunnel tool (skip if you already did this)
+brew install cloudflare/cloudflare/cloudflared
+
+# 2. Log in to Cloudflare (this opens your browser — pick your domain when asked)
+cloudflared tunnel login
+
+# 3. Create a tunnel (remember the ID it prints — you'll need it)
+cloudflared tunnel create claudeclaw
+
+# 4. Connect your domain to the tunnel (replace with your actual domain)
+cloudflared tunnel route dns claudeclaw dash.yourdomain.com
+```
+
+Now you need to create a config file. Open your terminal and paste:
+
+```bash
+nano ~/.cloudflared/config.yml
+```
+
+This opens a text editor in the terminal. Paste the following (replace the two placeholder values with what the `tunnel create` command printed):
+
 ```yaml
 tunnel: YOUR_TUNNEL_ID
-credentials-file: /path/to/YOUR_TUNNEL_ID.json
+credentials-file: /Users/yourname/.cloudflared/YOUR_TUNNEL_ID.json
+
 ingress:
   - hostname: dash.yourdomain.com
     service: http://localhost:3141
   - service: http_status:404
 ```
 
+Save and exit (in nano: press `Ctrl+X`, then `Y`, then `Enter`).
+
+Start the tunnel:
 ```bash
-cloudflared tunnel run claudeclaw                     # start the tunnel
-brew services start cloudflared                       # auto-start on boot
+cloudflared tunnel run claudeclaw
 ```
 
-Set `DASHBOARD_URL=https://dash.yourdomain.com` in `.env` and restart.
+Update your `.env`:
+```
+DASHBOARD_URL=https://dash.yourdomain.com
+```
 
-**Moving to a new machine?** Copy `~/.cloudflared/config.yml` and the credentials JSON. Run `cloudflared tunnel run claudeclaw`. Same URL, different machine, no DNS changes.
+Restart the bot. Your permanent dashboard URL is now live.
+
+**First time?** The secure certificate can take 1-5 minutes to activate on a brand new domain. If your browser shows an error page, wait a couple minutes and refresh.
+
+To make the tunnel start automatically when your computer boots:
+```bash
+brew services start cloudflared
+```
+
+**Moving to a new machine later?** Copy two files from the old machine: `~/.cloudflared/config.yml` and the `.json` credentials file next to it. Run `cloudflared tunnel run claudeclaw` on the new machine. Same URL, no changes needed.
 
 ### Things to know
 
-- **Token is in the URL.** Treat it like a password. Don't share screenshots of the address bar. The dashboard is read-only (nobody can modify anything through it), but task prompts and memory content are visible.
-- **No auth beyond the token.** No username/password, no session expiry. For personal use this is fine. For more, Cloudflare Access (free up to 50 users) can add login-based auth on top.
-- **Dashboard lives inside the bot process.** If the bot stops, the dashboard stops. Restart the bot and it comes back.
-- **SSL takes 1-5 minutes on brand new domains.** If the browser shows an error after setting up a named tunnel, wait and refresh.
+- **The dashboard link contains your password.** Treat it like you'd treat a password. Don't screenshot the address bar and post it somewhere. The dashboard can only show data (nobody can change or delete anything through it), but your task details and memory content would be visible.
+- **If the bot stops, the dashboard stops.** They run together. Restart the bot and the dashboard comes back automatically.
+- **Quick tunnel links are temporary.** If you used Option A and restart the tunnel tool, you get a new URL and the old one stops working. Option B (permanent URL) doesn't have this problem.
+- **For extra security:** Cloudflare Access (free for up to 50 users) can add a login page in front of the dashboard, so even if someone finds the URL they'd need to authenticate. This is optional — the token alone is fine for personal use.
 
-### Dashboard API
+<details>
+<summary><strong>Dashboard API reference (for developers)</strong></summary>
 
 All endpoints require `?token=YOUR_TOKEN`. Per-user endpoints also need `&chatId=YOUR_CHAT_ID`.
 
@@ -541,6 +614,8 @@ All endpoints require `?token=YOUR_TOKEN`. Per-user endpoints also need `&chatId
 | `GET /api/memories/list?chatId=&sector=&limit=&offset=` | Paginated memory drill-down |
 | `GET /api/health?chatId=` | Context gauge, session stats, connections |
 | `GET /api/tokens?chatId=` | Cost stats, 30-day timeline, cache rate |
+
+</details>
 
 ---
 
