@@ -460,12 +460,15 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
     if (errMsg.includes('exited with code 1')) {
       const usage = lastUsage.get(chatIdStr);
       const contextSize = usage?.lastCallInputTokens || usage?.lastCallCacheRead || 0;
-      const hint = contextSize > 0
-        ? `Last known context: ~${Math.round(contextSize / 1000)}k tokens.`
-        : 'No usage data from previous turns.';
-      await ctx.reply(
-        `Context window likely exhausted. ${hint}\n\nUse /newchat to start fresh, then /respin to pull recent conversation back in.`,
-      );
+      if (contextSize > 0) {
+        // We have prior usage data — context exhaustion is plausible
+        await ctx.reply(
+          `Context window likely exhausted. Last known context: ~${Math.round(contextSize / 1000)}k tokens.\n\nUse /newchat to start fresh, then /respin to pull recent conversation back in.`,
+        );
+      } else {
+        // No prior usage — likely a subprocess init failure, not context exhaustion
+        await ctx.reply('Claude Code subprocess failed to start. Check logs or try /newchat.');
+      }
     } else {
       await ctx.reply('Something went wrong. Check the logs and try again.');
     }
@@ -525,6 +528,9 @@ export function createBot(): Bot {
   // /start — simple greeting (auth-gated after setup)
   bot.command('start', (ctx) => {
     if (ALLOWED_CHAT_ID && !isAuthorised(ctx.chat!.id)) return;
+    if (AGENT_ID !== 'main') {
+      return ctx.reply(`${AGENT_ID.charAt(0).toUpperCase() + AGENT_ID.slice(1)} agent online.`);
+    }
     return ctx.reply('ClaudeClaw online. What do you need?');
   });
 
