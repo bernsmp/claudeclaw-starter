@@ -529,8 +529,9 @@ export function createBot(): Bot {
 
   // /chatid — get the chat ID (used during first-time setup)
   // Responds to anyone only when ALLOWED_CHAT_ID is not yet configured.
+  // /chatid — only responds when ALLOWED_CHAT_ID is not yet configured (first-time setup)
   bot.command('chatid', (ctx) => {
-    if (ALLOWED_CHAT_ID && !isAuthorised(ctx.chat!.id)) return;
+    if (ALLOWED_CHAT_ID) return; // Already configured — don't respond to anyone
     return ctx.reply(`Your chat ID: ${ctx.chat!.id}`);
   });
 

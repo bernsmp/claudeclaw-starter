@@ -40,6 +40,21 @@ export function startDashboard(botApi?: Api<RawApi>): void {
 
   const app = new Hono();
 
+  // CORS headers for cross-origin access (Cloudflare tunnel, mobile browsers)
+  app.use('*', async (c, next) => {
+    c.header('Access-Control-Allow-Origin', '*');
+    c.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    c.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (c.req.method === 'OPTIONS') return c.body(null, 204);
+    await next();
+  });
+
+  // Global error handler — prevents unhandled throws from killing the server
+  app.onError((err, c) => {
+    logger.error({ err: err.message }, 'Dashboard request error');
+    return c.json({ error: 'Internal server error' }, 500);
+  });
+
   // Token auth middleware
   app.use('*', async (c, next) => {
     const token = c.req.query('token');
