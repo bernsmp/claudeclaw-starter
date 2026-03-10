@@ -21,6 +21,7 @@ import { clearSession, getRecentConversation, getRecentMemories, getSession, get
 import { logger } from './logger.js';
 import { downloadMedia, buildPhotoMessage, buildDocumentMessage, buildVideoMessage } from './media.js';
 import { buildMemoryContext, saveConversationTurn } from './memory.js';
+import { messageQueue } from './message-queue.js';
 import { emitChatEvent, setProcessing, setActiveAbort, abortActiveQuery } from './state.js';
 
 // ── Context window tracking ──────────────────────────────────────────
@@ -1007,7 +1008,7 @@ export function createBot(): Bot {
     if (state) waState.delete(chatIdStr);
     if (slkState) slackState.delete(chatIdStr);
     // Fire-and-forget so grammY can process /stop while agent runs
-    handleMessage(ctx, text).catch((err) => logger.error({ err }, 'Unhandled message error'));
+    messageQueue.enqueue(chatIdStr, () => handleMessage(ctx, text));
   });
 
   // Voice messages — real transcription via Groq Whisper
@@ -1032,7 +1033,8 @@ export function createBot(): Bot {
       const transcribed = await transcribeAudio(localPath);
       // Only reply with voice if explicitly requested — otherwise execute and respond in text
       const wantsVoiceBack = /\b(respond (with|via|in) voice|send (me )?(a )?voice( note| back)?|voice reply|reply (with|via) voice)\b/i.test(transcribed);
-      handleMessage(ctx, `[Voice transcribed]: ${transcribed}`, wantsVoiceBack).catch((err) => logger.error({ err }, 'Unhandled voice message error'));
+      const chatIdStr = ctx.chat!.id.toString();
+      messageQueue.enqueue(chatIdStr, () => handleMessage(ctx, `[Voice transcribed]: ${transcribed}`, wantsVoiceBack));
     } catch (err) {
       logger.error({ err }, 'Voice transcription failed');
       await ctx.reply('Could not transcribe voice message. Try again.');
@@ -1054,7 +1056,8 @@ export function createBot(): Bot {
       const photo = ctx.message.photo[ctx.message.photo.length - 1];
       const localPath = await downloadMedia(activeBotToken, photo.file_id, 'photo.jpg');
       const msg = buildPhotoMessage(localPath, ctx.message.caption ?? undefined);
-      handleMessage(ctx, msg).catch((err) => logger.error({ err }, 'Unhandled photo message error'));
+      const chatIdStr = chatId.toString();
+      messageQueue.enqueue(chatIdStr, () => handleMessage(ctx, msg));
     } catch (err) {
       logger.error({ err }, 'Photo download failed');
       await ctx.reply('Could not download photo. Try again.');
@@ -1077,7 +1080,8 @@ export function createBot(): Bot {
       const filename = doc.file_name ?? 'file';
       const localPath = await downloadMedia(activeBotToken, doc.file_id, filename);
       const msg = buildDocumentMessage(localPath, filename, ctx.message.caption ?? undefined);
-      handleMessage(ctx, msg).catch((err) => logger.error({ err }, 'Unhandled document message error'));
+      const chatIdStr = chatId.toString();
+      messageQueue.enqueue(chatIdStr, () => handleMessage(ctx, msg));
     } catch (err) {
       logger.error({ err }, 'Document download failed');
       await ctx.reply('Could not download document. Try again.');
@@ -1098,7 +1102,8 @@ export function createBot(): Bot {
       const filename = video.file_name ?? `video_${Date.now()}.mp4`;
       const localPath = await downloadMedia(activeBotToken, video.file_id, filename);
       const msg = buildVideoMessage(localPath, ctx.message.caption ?? undefined);
-      handleMessage(ctx, msg).catch((err) => logger.error({ err }, 'Unhandled video message error'));
+      const chatIdStr = chatId.toString();
+      messageQueue.enqueue(chatIdStr, () => handleMessage(ctx, msg));
     } catch (err) {
       logger.error({ err }, 'Video download failed');
       await ctx.reply('Could not download video. Note: Telegram bots are limited to 20MB downloads.');
@@ -1119,7 +1124,8 @@ export function createBot(): Bot {
       const filename = `video_note_${Date.now()}.mp4`;
       const localPath = await downloadMedia(activeBotToken, videoNote.file_id, filename);
       const msg = buildVideoMessage(localPath, undefined);
-      handleMessage(ctx, msg).catch((err) => logger.error({ err }, 'Unhandled video note message error'));
+      const chatIdStr = chatId.toString();
+      messageQueue.enqueue(chatIdStr, () => handleMessage(ctx, msg));
     } catch (err) {
       logger.error({ err }, 'Video note download failed');
       await ctx.reply('Could not download video note. Note: Telegram bots are limited to 20MB downloads.');
