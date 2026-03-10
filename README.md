@@ -1409,7 +1409,11 @@ COMMS_BOT_TOKEN=1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxx
 
 ### Step 4 -- Start your agents
 
-Each agent runs in its own terminal. Open a new tab for each:
+You have two options: run agents in foreground terminals (great for testing), or install them as persistent background services with `launchd` (recommended for daily use).
+
+#### Option A: Foreground (testing / debugging)
+
+Open a new terminal tab for each agent:
 
 ```bash
 npm start -- --agent comms      # Terminal 1
@@ -1423,16 +1427,72 @@ Each will show:
 ClaudeClaw agent [comms] online: @mark_comms_bot
 ```
 
-Your main bot keeps running in its own terminal as usual (`npm start`).
+Your main bot keeps running in its own terminal as usual (`npm start`). Close the terminal and the agent dies.
 
-**Run as background services instead** (auto-restart, survive reboots):
+#### Option B: Background services with launchd (recommended)
+
+**What is launchd?** On macOS, `launchd` is the system's built-in service manager (like `systemd` on Linux). It starts your agents automatically when you log in, and if an agent crashes, launchd restarts it within 30 seconds. No open terminals needed. Your agents just run.
+
+**Why this is better than running terminals:**
+- Agents **survive reboots** -- they start automatically when you log in
+- Agents **auto-restart on crash** -- if one dies, launchd brings it back
+- **No open terminal tabs** -- they run invisibly in the background
+- **One command** installs everything -- main bot + all agents at once
+
+**Install all agents with one command:**
 
 ```bash
-bash scripts/agent-service.sh install comms
-bash scripts/agent-service.sh install content
-bash scripts/agent-service.sh install ops
-bash scripts/agent-service.sh install research
+bash scripts/install-launchd.sh
 ```
+
+This script:
+1. Builds the project (`npm run build`)
+2. Removes any stale/orphaned agents from previous installs
+3. Copies each agent's `.plist` config to `~/Library/LaunchAgents/`
+4. Loads them into launchd (they start immediately)
+5. Verifies all agents are running and shows their PIDs
+
+After installation you'll see:
+```
+com.claudeclaw.main:     running (PID: 12345)
+com.claudeclaw.comms:    running (PID: 12346)
+com.claudeclaw.content:  running (PID: 12347)
+com.claudeclaw.ops:      running (PID: 12348)
+com.claudeclaw.research: running (PID: 12349)
+
+All agents installed and running.
+```
+
+**Useful commands after install:**
+
+```bash
+# Check which agents are running
+launchctl list | grep claudeclaw
+
+# View logs for a specific agent
+tail -f logs/main.log
+tail -f logs/comms.log
+
+# Restart a single agent (e.g., after code changes)
+launchctl unload ~/Library/LaunchAgents/com.claudeclaw.comms.plist
+launchctl load ~/Library/LaunchAgents/com.claudeclaw.comms.plist
+
+# Restart ALL agents after a rebuild
+npm run build
+for agent in main comms ops content research; do
+  launchctl unload ~/Library/LaunchAgents/com.claudeclaw.$agent.plist 2>/dev/null
+  launchctl load ~/Library/LaunchAgents/com.claudeclaw.$agent.plist
+done
+
+# Remove all agents (stop everything)
+bash scripts/uninstall-launchd.sh
+```
+
+**How the plist files work:** Each agent has a `.plist` file in the `launchd/` directory that tells macOS how to run it. These are XML config files that specify the command, working directory, environment variables, and log paths. You shouldn't need to edit them unless you're adding a custom agent -- the install script handles everything.
+
+**Logs:** Each agent writes stdout and stderr to `logs/<agent-name>.log`. These files grow over time; you can safely truncate them with `> logs/comms.log` if they get large.
+
+**Linux users:** launchd is macOS-only. On Linux, use `systemd` or run agents with `pm2` / `screen` / `tmux`. The same `npm start -- --agent comms` command works everywhere.
 
 ### Step 5 -- Message your agents
 
@@ -1463,20 +1523,21 @@ This means when you:
 Agents load code and skills at startup. Rebuilding `dist/` or adding skills doesn't hot-reload running processes. You need to restart:
 
 ```bash
+# Rebuild first
+npm run build
+
+# If running via launchd (recommended): reload each agent
+for agent in main comms ops content research; do
+  launchctl unload ~/Library/LaunchAgents/com.claudeclaw.$agent.plist 2>/dev/null
+  launchctl load ~/Library/LaunchAgents/com.claudeclaw.$agent.plist
+done
+
 # If running in terminals: Ctrl+C each agent, then restart
 npm start -- --agent comms
 npm start -- --agent content
 
-# If running as background services: uninstall and reinstall
-bash scripts/agent-service.sh uninstall comms
-bash scripts/agent-service.sh install comms
-
-# Nuclear option: kill all agents and restart
-pkill -f "dist/index.js --agent"
-npm start -- --agent comms &
-npm start -- --agent content &
-npm start -- --agent ops &
-npm start -- --agent research &
+# Or re-run the install script (rebuilds + restarts everything)
+bash scripts/install-launchd.sh
 ```
 
 **Note:** After restarting, Telegram may cache the old command menu for a few minutes. Force-close and reopen Telegram on your phone to see updated `/` commands immediately.
