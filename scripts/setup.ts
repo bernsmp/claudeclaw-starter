@@ -259,7 +259,98 @@ async function main() {
     }
   }
 
-  // ── 4. What do you want to enable? ──────────────────────────────────────
+  // ── 4. Your role ────────────────────────────────────────────────────────
+  section('What do you do?');
+
+  info('This shapes your assistant\'s default behavior, morning briefs, and starter skills.');
+  info('Pick the closest match — you can customize everything later.');
+  console.log();
+  console.log(`  ${c.bold}1.${c.reset} Entrepreneur / Creator   ${c.gray}— solo, building + selling, content${c.reset}`);
+  console.log(`  ${c.bold}2.${c.reset} Consultant / Agency      ${c.gray}— client work, deliverables, billing${c.reset}`);
+  console.log(`  ${c.bold}3.${c.reset} Business Owner / Operator ${c.gray}— team, systems, cash flow${c.reset}`);
+  console.log();
+
+  let role = '';
+  while (!role) {
+    const pick = await ask('Your role (1, 2, or 3)');
+    if (['1', '2', '3'].includes(pick)) {
+      role = pick === '1' ? 'entrepreneur' : pick === '2' ? 'consultant' : 'operator';
+    } else {
+      console.log(`  ${c.red}Pick 1, 2, or 3.${c.reset}`);
+    }
+  }
+
+  const roleLabels: Record<string, string> = {
+    entrepreneur: 'Entrepreneur / Creator',
+    consultant: 'Consultant / Agency',
+    operator: 'Business Owner / Operator',
+  };
+  ok(`Role: ${roleLabels[role]}`);
+
+  // ── 5. About you ──────────────────────────────────────────────────────
+  section('About you');
+
+  info('A few quick questions so your assistant knows who it\'s working for.');
+  console.log();
+
+  const ownerName = await ask('Your first name');
+  const assistantName = await ask('What should the bot be called?', 'Atlas');
+  const ownerBio = await ask('One sentence: what do you do?', `${ownerName} runs a business.`);
+  const obsidianPath = await ask('Obsidian vault path (Enter to skip)', '');
+
+  ok(`Owner: ${ownerName}`);
+  ok(`Assistant: ${assistantName}`);
+
+  // ── 6. Autonomy tiers ─────────────────────────────────────────────────
+  section('Autonomy tiers');
+
+  console.log(`  ${c.bold}These control what ${assistantName} can do without asking.${c.reset}`);
+  console.log();
+  info('For each tier, type a comma-separated list. Or press Enter for the defaults.');
+  console.log();
+
+  // Role-specific defaults
+  const defaults: Record<string, { green: string; yellow: string; red: string }> = {
+    entrepreneur: {
+      green: 'Look things up, check calendar, create tasks, draft content, run research, read emails',
+      yellow: 'Send emails on your behalf, post content, schedule meetings, modify files',
+      red: 'Delete data, make purchases, publish anything publicly, access financial accounts',
+    },
+    consultant: {
+      green: 'Look up client info, check calendar, create tasks, run research, read emails, prep meeting briefs',
+      yellow: 'Send emails on your behalf, update client records, schedule meetings, draft invoices',
+      red: 'Delete data, make purchases, send client-facing messages without approval, access financial accounts',
+    },
+    operator: {
+      green: 'Check dashboards, pull reports, look up team info, read emails, create tasks, run research',
+      yellow: 'Send emails on your behalf, update records, schedule meetings, modify team docs',
+      red: 'Delete data, make purchases, send external communications, modify permissions, access financial accounts',
+    },
+  };
+
+  const d = defaults[role];
+
+  console.log(`  ${c.green}🟢 GREEN${c.reset} ${c.bold}— just do it, no need to ask${c.reset}`);
+  info(`Default: ${d.green}`);
+  const greenInput = await ask('Your green tier (Enter for default)');
+  const greenTier = greenInput || d.green;
+  console.log();
+
+  console.log(`  ${c.yellow}🟡 YELLOW${c.reset} ${c.bold}— confirm with you first${c.reset}`);
+  info(`Default: ${d.yellow}`);
+  const yellowInput = await ask('Your yellow tier (Enter for default)');
+  const yellowTier = yellowInput || d.yellow;
+  console.log();
+
+  console.log(`  ${c.red}🔴 RED${c.reset} ${c.bold}— never do this, ever${c.reset}`);
+  info(`Default: ${d.red}`);
+  const redInput = await ask('Your red tier (Enter for default)');
+  const redTier = redInput || d.red;
+  console.log();
+
+  ok('Autonomy tiers configured');
+
+  // ── 7. What do you want to enable? ──────────────────────────────────────
   section('Choose your features');
 
   info('ClaudeClaw has several optional features. Tell us what you want.');
@@ -330,24 +421,83 @@ async function main() {
     }
   }
 
-  // ── 6. CLAUDE.md personalization ─────────────────────────────────────────
-  section('Personalize your assistant (CLAUDE.md)');
+  // ── CLAUDE.md generation ────────────────────────────────────────────────
+  section('Building your CLAUDE.md');
 
-  info('CLAUDE.md is the personality and context file loaded into every session.');
-  info('It defines who your assistant is, what you do, and how it communicates.');
-  console.log();
-  info('At minimum, replace the [BRACKETED] placeholders:');
-  bullet('[YOUR ASSISTANT NAME]  — what you want to call the bot');
-  bullet('[YOUR NAME]            — your name (so it knows who it\'s talking to)');
-  bullet('[YOUR_OBSIDIAN_VAULT]  — path to your Obsidian vault, if you use one');
-  console.log();
-  info('The more context you add, the better it performs without explaining things');
-  info('in every message. Think of it as a system prompt that persists everywhere.');
+  info('Generating your personalized assistant config...');
   console.log();
 
-  const openClaude = await confirm('Open CLAUDE.md now to edit it?', true);
+  const claudePath = path.join(PROJECT_ROOT, 'CLAUDE.md');
+  let claudeTemplate = fs.readFileSync(claudePath, 'utf-8');
+
+  // Role-specific content
+  const roleDescriptions: Record<string, string> = {
+    entrepreneur: `You serve a solo entrepreneur/creator. Priorities: revenue, content, product development, and staying unblocked. ${ownerName} is usually the bottleneck, so your job is to reduce friction everywhere. Default to action over planning.`,
+    consultant: `You serve a consultant/agency owner. Priorities: client prep, deliverable tracking, billing, and relationship management. Every client interaction should be well-prepared. Track open loops and follow up before things slip.`,
+    operator: `You serve a business owner/operator. Priorities: team coordination, operational health, cash flow, and systems. Surface problems early. Default to dashboards and summaries over raw data.`,
+  };
+
+  const roleSkills: Record<string, string> = {
+    entrepreneur: `<!-- Starter skills for entrepreneurs -->
+| \`content-drafts\` | draft posts, write content, social media |
+| \`revenue-check\` | sales, revenue, pipeline, payments |`,
+    consultant: `<!-- Starter skills for consultants -->
+| \`client-prep\` | meeting prep, client brief, before the call |
+| \`billing-check\` | invoices, payments, retainer status, billing |`,
+    operator: `<!-- Starter skills for operators -->
+| \`team-rollup\` | team status, who's doing what, blockers |
+| \`cash-flow\` | revenue, expenses, runway, financial health |`,
+  };
+
+  const morningBriefs: Record<string, string> = {
+    entrepreneur: `When {{OWNER_NAME}} says "morning" or "brief", give a concise rundown:
+1. **Today's calendar** — what's on the schedule, any conflicts
+2. **Top 3 priorities** — the most important things to move forward today
+3. **Revenue/pipeline** — any payments, new leads, or follow-ups due
+4. **Content** — anything scheduled or due for publishing
+5. **Overnight** — important emails or messages that came in
+
+Keep it scannable. No fluff. If there's nothing for a section, skip it.`,
+    consultant: `When {{OWNER_NAME}} says "morning" or "brief", give a concise rundown:
+1. **Today's calendar** — meetings, client calls, prep needed
+2. **Client check-ins due** — who hasn't been contacted recently
+3. **Open deliverables** — what's in progress, what's overdue
+4. **Billing** — outstanding invoices, upcoming renewals
+5. **Overnight** — important emails or client messages
+
+Keep it scannable. No fluff. If there's nothing for a section, skip it.`,
+    operator: `When {{OWNER_NAME}} says "morning" or "brief", give a concise rundown:
+1. **Today's calendar** — meetings, standups, reviews
+2. **Team status** — blockers, deadlines, who needs attention
+3. **Cash flow** — payments in/out, anything flagged
+4. **Systems** — anything broken, alerts, operational issues
+5. **Overnight** — important emails or messages
+
+Keep it scannable. No fluff. If there's nothing for a section, skip it.`,
+  };
+
+  // Format tiers as bullet lists
+  function tierToBullets(tierStr: string): string {
+    return tierStr.split(',').map(item => `- ${item.trim()}`).join('\n');
+  }
+
+  // Replace all template tokens
+  claudeTemplate = claudeTemplate.replace(/\{\{ASSISTANT_NAME\}\}/g, assistantName);
+  claudeTemplate = claudeTemplate.replace(/\{\{OWNER_NAME\}\}/g, ownerName);
+  claudeTemplate = claudeTemplate.replace(/\{\{OWNER_BIO\}\}/g, ownerBio);
+  claudeTemplate = claudeTemplate.replace(/\{\{ROLE_DESCRIPTION\}\}/g, roleDescriptions[role]);
+  claudeTemplate = claudeTemplate.replace(/\{\{GREEN_TIER\}\}/g, tierToBullets(greenTier));
+  claudeTemplate = claudeTemplate.replace(/\{\{YELLOW_TIER\}\}/g, tierToBullets(yellowTier));
+  claudeTemplate = claudeTemplate.replace(/\{\{RED_TIER\}\}/g, tierToBullets(redTier));
+  claudeTemplate = claudeTemplate.replace(/\{\{OBSIDIAN_PATH\}\}/g, obsidianPath || '[not configured — add your vault path here]');
+  claudeTemplate = claudeTemplate.replace(/\{\{ROLE_SKILLS\}\}/g, roleSkills[role]);
+  claudeTemplate = claudeTemplate.replace(/\{\{MORNING_BRIEF\}\}/g, morningBriefs[role]);
+
+  fs.writeFileSync(claudePath, claudeTemplate, 'utf-8');
+  ok('CLAUDE.md generated with your settings');
+
+  const openClaude = await confirm('Open CLAUDE.md to review/edit?', false);
   if (openClaude) {
-    const claudePath = path.join(PROJECT_ROOT, 'CLAUDE.md');
     const editor = process.env.EDITOR || (PLATFORM === 'win32' ? 'notepad' : 'nano');
     try {
       spawnSync(editor, [claudePath], { stdio: 'inherit' });

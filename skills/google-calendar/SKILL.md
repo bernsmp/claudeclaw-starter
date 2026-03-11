@@ -1,114 +1,88 @@
 ---
 name: google-calendar
-description: Manage your Google Calendar from Claude Code. Create events with Meet links, send invites, check availability.
-allowed-tools: Bash(CLAUDECLAW_DIR=* ~/.venv/bin/python3 ~/.config/calendar/gcal.py *)
+description: Manage your Google Calendar from Claude Code. View agenda, create events with attendees, check availability.
+allowed-tools: Bash(gws *)
 ---
 
 # Google Calendar Skill
 
 ## Purpose
 
-Create meetings with Google Meet links, send invites, check availability, and manage calendar events from Claude Code.
+View schedule, create meetings, send invites, and check availability via the `gws` CLI.
 
-## Environment
+## Quick Commands (Helpers)
 
-The calendar CLI reads credential paths from environment variables, loaded from ClaudeClaw's `.env` via `CLAUDECLAW_DIR`. Every command MUST use this prefix:
-
-```
-CLAUDECLAW_DIR=/path/to/claudeclaw
-```
-
-Your `.env` should contain:
-
-```
-GOOGLE_CREDS_PATH=~/.config/gmail/credentials.json
-GCAL_TOKEN_PATH=~/.config/calendar/token.json
-```
-
-If these aren't set, the script falls back to `~/.config/gmail/credentials.json` (shared with Gmail) and `~/.config/calendar/token.json`.
-
-## Commands
-
-### List upcoming events
+### View agenda
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py list
+gws calendar +agenda --today
+gws calendar +agenda --tomorrow
+gws calendar +agenda --week
+gws calendar +agenda --days 3
+gws calendar +agenda --format table
 ```
 
-Returns next 10 events as JSON. Each entry has: `id`, `summary`, `start`, `end`, `attendees`, `meet_link`.
+**This is the default command** when the user asks about their schedule.
 
-### List events within N days
+### Create an event
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py list --days 7
+gws calendar +insert --summary "Meeting Title" --start "2026-03-15T10:00:00" --end "2026-03-15T10:30:00"
+gws calendar +insert --summary "Review" --start "2026-03-15T14:00:00" --end "2026-03-15T15:00:00" --attendee "alice@example.com" --attendee "bob@example.com"
+gws calendar +insert --summary "Lunch" --start "..." --end "..." --location "Cafe Roma" --description "Quarterly catch-up"
+```
+
+Use `--attendee` once per person (repeat the flag for multiple).
+
+## Raw API Commands
+
+### List events with filters
+
+```bash
+gws calendar events list --calendarId primary --timeMin "2026-03-15T00:00:00Z" --timeMax "2026-03-15T23:59:59Z"
+```
+
+### Quick add (natural language)
+
+```bash
+gws calendar events quickAdd --calendarId primary --text "Coffee with Sarah tomorrow at 3pm"
 ```
 
 ### Get event details
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py get <event_id>
+gws calendar events get --calendarId primary --eventId <event_id>
 ```
-
-### Create event with Meet link and invites
-
-```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py create "Meeting Title" "2026-03-15 10:00" --duration 30 --attendees "person@example.com,other@example.com" --meet
-```
-
-- `--duration` in minutes (default: 30)
-- `--attendees` comma-separated emails (sends invite emails automatically)
-- `--meet` adds a Google Meet video link
-- `--description` adds event description
-- `--location` adds location
 
 ### Update an event
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py update <event_id> --title "New Title" --start "2026-03-16 14:00" --duration 60 --add-attendees "new@example.com" --meet
+gws calendar events patch --calendarId primary --eventId <event_id> --json '{"summary": "New Title"}'
 ```
 
-All flags are optional. Only provided fields are updated. Attendees are notified of changes.
-
-### Cancel an event
+### Delete an event
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py cancel <event_id>
+gws calendar events delete --calendarId primary --eventId <event_id>
 ```
 
-Cancels the event and sends cancellation notices to all attendees.
+Sends cancellation notices to all attendees.
 
 ### Check free/busy
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py freebusy "2026-03-15 09:00" "2026-03-15 17:00"
-```
-
-Shows busy time slots in the given range. If no conflicts, says "Time range is free."
-
-### Re-authenticate
-
-```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py auth
+gws calendar freebusy query --json '{"timeMin": "2026-03-15T09:00:00Z", "timeMax": "2026-03-15T17:00:00Z", "items": [{"id": "primary"}]}'
 ```
 
 ## CRITICAL: Day-of-Week Verification
 
-**NEVER assume a date from a day name** (e.g. "Monday", "next Thursday"). Always verify before creating an event:
+**NEVER assume a date from a day name** (e.g. "Monday", "next Thursday"). Always verify:
 
 ```bash
 python3 -c "from datetime import date; d = date(2026, 3, 15); print(f'{d.strftime(\"%A\")} {d}')"
 ```
 
-- If the output day name does NOT match what was requested, find the correct date
-- This is a **blocking requirement**. Getting the day wrong sends a wrong invite to a real person.
-
-## Workflow
-
-1. If the user doesn't specify a time, check the calendar first with `list --days 7`
-2. **If a day name was mentioned, verify the date matches that day**
-3. Check `freebusy` for the proposed slot
-4. Create the event with `--meet` and `--attendees`
-5. Confirm: show title, time, **day of week**, attendees, and Meet link
+If the output day name does NOT match what was requested, find the correct date. This is a blocking requirement. Getting the day wrong sends a wrong invite to a real person.
 
 ## Confirmation Before Creating
 
@@ -116,43 +90,27 @@ Always show the user what you're about to create before running the command:
 - Title
 - **Day of week + Date/time** (e.g. "Monday Mar 15, 12:00pm")
 - Duration
-- Attendees
-- Meet: yes/no
+- Attendees (if any)
 
 Then ask for confirmation before executing.
 
-## Datetime Formats
+## Defaults
 
-All of these work:
-- `2026-03-15 10:00`
-- `2026-03-15 2:00PM`
-- `2026-03-15T14:00`
-- `03/15/2026 10:00`
+- Duration: 30 minutes (unless specified)
+- Always confirm before creating
+- Times in ISO 8601 format
 
 ## Timezone
 
-The script defaults to **America/New_York**. To change it, edit the `TIMEZONE` constant in `gcal.py`.
-
-## Defaults
-
-- Duration: 30 minutes (unless the user specifies otherwise)
-- Always add `--meet` unless the user specifically says no video call
-- Invites are sent to all attendees automatically
+Default timezone depends on your system locale. Append timezone offset to times if needed: `2026-03-15T10:00:00-05:00` for US Eastern.
 
 ## One-Time Setup
 
-Uses the same Google Cloud project as Gmail. If `token.json` is missing:
+Shared with Gmail. If Gmail is already set up, calendar auth is done too.
 
 ```bash
-CLAUDECLAW_DIR=/path/to/claudeclaw ~/.venv/bin/python3 ~/.config/calendar/gcal.py auth
+npm install -g @googleworkspace/cli
+gws auth setup
 ```
 
-Browser opens, sign in, approve Calendar access, done.
-
-If you haven't set up Gmail yet, you'll need `credentials.json` first. See the Gmail skill setup instructions.
-
-## Error Handling
-
-- If `credentials.json` missing, point to Gmail setup (same file)
-- If `token.json` missing, run auth automatically
-- If event creation fails, show error and ask the user what to do
+Or: `gws auth login` if already installed.
