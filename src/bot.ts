@@ -22,7 +22,7 @@ import { logger } from './logger.js';
 import { downloadMedia, buildPhotoMessage, buildDocumentMessage, buildVideoMessage } from './media.js';
 import { buildMemoryContext, saveConversationTurn } from './memory.js';
 import { messageQueue } from './message-queue.js';
-import { parseDelegation, delegateToAgent, getAvailableAgents } from './orchestrator.js';
+import { parseDelegation, delegateToAgent, getAvailableAgents, analyzeAndRoute } from './orchestrator.js';
 import { emitChatEvent, setProcessing, setActiveAbort, abortActiveQuery } from './state.js';
 
 // ── Context window tracking ──────────────────────────────────────────
@@ -354,6 +354,46 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       setProcessing(chatIdStr, false);
     }
     return;
+  }
+
+  // ── Smart routing (auto-delegation) ──────────────────────────────
+  // When no explicit @agent is used, classify the message and auto-route
+  // to the best specialist agent. Falls through to main if planner says so.
+  const agents = getAvailableAgents();
+  if (agents.length > 0 && AGENT_ID === 'main') {
+    try {
+      setProcessing(chatIdStr, true);
+      await sendTyping(ctx.api, chatId);
+
+      const routeResult = await analyzeAndRoute(
+        message,
+        chatIdStr,
+        AGENT_ID,
+        (progressMsg) => {
+          emitChatEvent({ type: 'progress', chatId: chatIdStr, description: progressMsg });
+          void ctx.reply(progressMsg).catch(() => {});
+        },
+      );
+
+      if (routeResult) {
+        const response = routeResult.response;
+        if (!skipLog) {
+          saveConversationTurn(chatIdStr, message, response, undefined, AGENT_ID);
+        }
+        emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: response, source: 'telegram' });
+        for (const part of splitMessage(formatForTelegram(response))) {
+          await ctx.reply(part, { parse_mode: 'HTML' });
+        }
+        setProcessing(chatIdStr, false);
+        return;
+      }
+      // routeResult null = planner says main should handle it — fall through
+      setProcessing(chatIdStr, false);
+    } catch (err) {
+      logger.warn({ err }, 'Smart router failed, falling back to main agent');
+      setProcessing(chatIdStr, false);
+      // Fall through to main agent
+    }
   }
 
   // Build memory context and prepend to message

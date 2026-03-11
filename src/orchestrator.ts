@@ -5,7 +5,9 @@ import path from 'path';
 import { runAgent, UsageInfo } from './agent.js';
 import { loadAgentConfig, listAgentIds } from './agent-config.js';
 import { PROJECT_ROOT } from './config.js';
-import { logToHiveMind, createInterAgentTask, completeInterAgentTask } from './db.js';
+import { logToHiveMind, createInterAgentTask, completeInterAgentTask, savePlan, updatePlanStatus } from './db.js';
+import { classifyAndPlan } from './planner.js';
+import { executePlan, buildSynthesisPrompt } from './dag-executor.js';
 import { logger } from './logger.js';
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -221,5 +223,131 @@ export async function delegateToAgent(
       `Delegation from ${fromAgent} failed: ${errMsg.slice(0, 120)}`,
     );
     throw err;
+  }
+}
+
+// ── Smart Routing ────────────────────────────────────────────────────
+
+/** Messages that should skip the planner entirely (trivial/conversational). */
+const SKIP_PLANNER = /^(\/|ok\b|thanks|yes\b|no\b|sure\b|got it|👍|hi\b|hey\b|hello\b)/i;
+
+export interface SmartRouteResult {
+  response: string;
+  planId: string;
+  planType: 'simple' | 'complex';
+}
+
+/**
+ * Analyze a message, classify intent, and route to the best agent(s).
+ *
+ * Returns null when the message should be handled by the main agent
+ * (either because there are no specialist agents, the message is trivial,
+ * or the planner explicitly routed to main).
+ */
+export async function analyzeAndRoute(
+  message: string,
+  chatId: string,
+  fromAgent: string,
+  onProgress: (msg: string) => void,
+): Promise<SmartRouteResult | null> {
+  // Skip if no agents configured or message is trivial
+  if (agentRegistry.length === 0) return null;
+  if (message.length < 15 || SKIP_PLANNER.test(message.trim())) return null;
+
+  onProgress('Analyzing...');
+
+  const plan = await classifyAndPlan(message, agentRegistry);
+
+  // If planner says "main", let the caller handle it normally
+  if (
+    plan.tasks.length === 1 &&
+    plan.tasks[0].targetAgent === 'main'
+  ) {
+    logger.info({ reasoning: plan.reasoning }, 'Planner routed to main');
+    return null;
+  }
+
+  const planId = crypto.randomUUID();
+  savePlan(planId, chatId, message, plan);
+
+  logger.info(
+    { planId, type: plan.type, steps: plan.tasks.length, reasoning: plan.reasoning },
+    'Plan created',
+  );
+
+  if (plan.type === 'simple') {
+    // Single-agent delegation
+    const task = plan.tasks[0];
+    onProgress(`Routing to ${task.targetAgent}...`);
+
+    try {
+      const result = await delegateToAgent(
+        task.targetAgent,
+        task.prompt,
+        chatId,
+        fromAgent,
+        onProgress,
+      );
+
+      const response = result.text?.trim() || 'Agent completed with no output.';
+      updatePlanStatus(planId, 'completed', response.slice(0, 4000));
+
+      return { response, planId, planType: 'simple' };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      updatePlanStatus(planId, 'failed', errMsg);
+      throw err;
+    }
+  }
+
+  // Complex: execute the DAG
+  onProgress(`Running ${plan.tasks.length}-step plan...`);
+
+  const execResult = await executePlan(plan, planId, chatId, fromAgent, onProgress);
+
+  // Synthesize results
+  onProgress('Synthesizing results...');
+
+  const completed = execResult.steps.filter((s) => s.status === 'completed');
+  if (completed.length === 0) {
+    const errMsg = 'All plan steps failed.';
+    updatePlanStatus(planId, 'failed', errMsg);
+    return { response: errMsg, planId, planType: 'complex' };
+  }
+
+  // If only one step completed, just return its output directly
+  if (completed.length === 1) {
+    const response = completed[0].text || 'Completed with no output.';
+    updatePlanStatus(planId, 'completed', response.slice(0, 4000));
+    return { response, planId, planType: 'complex' };
+  }
+
+  // Multiple steps: synthesize via a delegation to main
+  const synthesisPrompt = buildSynthesisPrompt(message, execResult.steps);
+  try {
+    const synthesisResult = await runAgent(
+      synthesisPrompt,
+      undefined, // fresh session
+      () => {},
+      undefined,
+      undefined,
+    );
+
+    const response = synthesisResult.text?.trim() || 'Plan completed.';
+    updatePlanStatus(planId, 'completed', response.slice(0, 4000));
+
+    const totalSecs = Math.round(execResult.totalDurationMs / 1000);
+    return {
+      response: `${response}\n\n_${plan.tasks.length} steps, ${totalSecs}s total_`,
+      planId,
+      planType: 'complex',
+    };
+  } catch {
+    // Synthesis failed — just concatenate results
+    const fallback = completed
+      .map((s) => `**${s.description}** (${s.agentId}):\n${s.text}`)
+      .join('\n\n---\n\n');
+    updatePlanStatus(planId, 'completed', fallback.slice(0, 4000));
+    return { response: fallback, planId, planType: 'complex' };
   }
 }

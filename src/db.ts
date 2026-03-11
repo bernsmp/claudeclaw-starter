@@ -214,6 +214,46 @@ function runMigrations(database: Database.Database): void {
     database.exec(`ALTER TABLE conversation_log ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'main'`);
   }
 
+  // Smart orchestrator: task_plans + task_plan_steps tables
+  const tables = database.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='task_plans'`,
+  ).get();
+  if (!tables) {
+    database.exec(`
+      CREATE TABLE task_plans (
+        id           TEXT PRIMARY KEY,
+        chat_id      TEXT NOT NULL,
+        message      TEXT NOT NULL,
+        plan_type    TEXT NOT NULL,
+        plan_json    TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'pending',
+        result       TEXT,
+        created_at   INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+
+      CREATE INDEX idx_task_plans_chat ON task_plans(chat_id, created_at DESC);
+
+      CREATE TABLE task_plan_steps (
+        id           TEXT PRIMARY KEY,
+        plan_id      TEXT NOT NULL,
+        step_index   INTEGER NOT NULL,
+        agent_id     TEXT NOT NULL,
+        description  TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'pending',
+        result       TEXT,
+        depends_on   TEXT,
+        started_at   INTEGER,
+        completed_at INTEGER,
+        duration_ms  INTEGER,
+        FOREIGN KEY (plan_id) REFERENCES task_plans(id)
+      );
+
+      CREATE INDEX idx_plan_steps_plan ON task_plan_steps(plan_id, step_index);
+    `);
+  }
+
   // Task state machine: add started_at and last_status columns
   const taskColNames = taskCols.map((c) => c.name);
   if (!taskColNames.includes('started_at')) {
@@ -972,6 +1012,87 @@ export function completeInterAgentTask(
   db.prepare(
     `UPDATE inter_agent_tasks SET status = ?, result = ?, completed_at = datetime('now') WHERE id = ?`,
   ).run(status, result?.slice(0, 2000) ?? null, id);
+}
+
+// ── Task Plans (Smart Orchestrator) ──────────────────────────────────
+
+export interface TaskPlanRow {
+  id: string;
+  chat_id: string;
+  message: string;
+  plan_type: string;
+  plan_json: string;
+  status: string;
+  result: string | null;
+  created_at: number;
+  completed_at: number | null;
+}
+
+export function savePlan(
+  id: string,
+  chatId: string,
+  message: string,
+  plan: { type: string; reasoning: string; tasks: unknown[] },
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(
+    `INSERT INTO task_plans (id, chat_id, message, plan_type, plan_json, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'running', ?)`,
+  ).run(id, chatId, message, plan.type, JSON.stringify(plan), now);
+}
+
+export function updatePlanStatus(
+  id: string,
+  status: string,
+  result?: string,
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(
+    `UPDATE task_plans SET status = ?, result = ?, completed_at = ? WHERE id = ?`,
+  ).run(status, result?.slice(0, 4000) ?? null, now, id);
+}
+
+export function savePlanStep(
+  planId: string,
+  step: { id: string; targetAgent: string; description: string; prompt: string; dependsOn: string[] },
+  index: number,
+): void {
+  db.prepare(
+    `INSERT INTO task_plan_steps (id, plan_id, step_index, agent_id, description, prompt, status, depends_on)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+  ).run(
+    step.id,
+    planId,
+    index,
+    step.targetAgent,
+    step.description,
+    step.prompt,
+    JSON.stringify(step.dependsOn),
+  );
+}
+
+export function updatePlanStepStatus(
+  stepId: string,
+  status: string,
+  result?: string,
+  durationMs?: number,
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  if (status === 'running') {
+    db.prepare(
+      `UPDATE task_plan_steps SET status = ?, started_at = ? WHERE id = ?`,
+    ).run(status, now, stepId);
+  } else {
+    db.prepare(
+      `UPDATE task_plan_steps SET status = ?, result = ?, completed_at = ?, duration_ms = ? WHERE id = ?`,
+    ).run(status, result?.slice(0, 2000) ?? null, now, durationMs ?? null, stepId);
+  }
+}
+
+export function getRecentPlans(chatId: string, limit = 10): TaskPlanRow[] {
+  return db
+    .prepare('SELECT * FROM task_plans WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(chatId, limit) as TaskPlanRow[];
 }
 
 export function getInterAgentTasks(
